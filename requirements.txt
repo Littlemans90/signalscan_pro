@@ -1,0 +1,17 @@
+# Core Dependencies
+kivy==2.3.0
+python-dotenv==1.0.0
+
+# Market Data
+yfinance==0.2.40
+pandas==2.2.2
+requests==2.32.3
+
+# WebSockets
+websocket-client==1.8.0
+
+# Audio
+pygame==2.5.2
+
+# Utilities
+pytz==2024.1
