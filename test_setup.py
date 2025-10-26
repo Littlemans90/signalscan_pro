@@ -34,15 +34,18 @@ def test_virtual_env():
 
 def test_dependencies():
     """Check if all required packages are installed"""
+    # Core packages to check
     required = {
-        'kivy': '2.3.0',
-        'dotenv': '1.0.0',
-        'yfinance': '0.2.40',
-        'pandas': '2.2.2',
-        'requests': '2.32.3',
+        'kivy': '2.3.1',
+        'dotenv': '1.1.1',
+        'yfinance': '0.2.66',
+        'pandas': '2.3.2',
+        'numpy': '2.3.3',
+        'requests': '2.32.5',
         'websocket': '1.8.0',
-        'pygame': '2.5.2',
-        'pytz': '2024.1'
+        'pygments': '2.19.2',
+        'pytz': '2025.2',
+        'alpaca': '0.42.2',  # alpaca-py
     }
     
     all_installed = True
@@ -55,6 +58,9 @@ def test_dependencies():
             elif package == 'websocket':
                 import websocket
                 version = websocket.__version__
+            elif package == 'alpaca':
+                import alpaca
+                version = alpaca.__version__
             else:
                 module = __import__(package)
                 version = getattr(module, '__version__', 'unknown')
@@ -63,6 +69,8 @@ def test_dependencies():
         except ImportError:
             print(f"[✗] {package}: NOT INSTALLED")
             all_installed = False
+        except Exception as e:
+            print(f"[⚠] {package}: Error checking version - {e}")
     
     return all_installed
 
