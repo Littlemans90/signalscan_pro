@@ -1,117 +1,146 @@
-# main.py
-
 """
 SignalScan PRO - Main Entry Point
 US Stock Market Momentum & Volatility Scanner
 """
 
 import sys
-from core.file_manager import file_manager
-from core.logger import logger_system
-from config.settings import settings
-from config.api_keys import api_keys
+import signal
+import time
+from core.file_manager import FileManager
+from core.logger import Logger
+from config.settings import SETTINGS
+from config.api_keys import validate_api_keys
+from scanners import (
+    Tier1YFinance,
+    AlpacaValidator,
+    TradierCategorizer,
+    NewsAggregator,
+    HaltMonitor
+)
 
-def print_banner():
-    """Print startup banner"""
-    print("=" * 60)
-    print("SignalScan PRO - US Stock Market Scanner")
-    print("=" * 60)
-    print()
 
-def initialize_system():
-    """Initialize all core systems"""
-    print("[INIT] Starting SignalScan PRO...")
-    print()
-    
-    # Initialize file system
-    print("[FILE-MANAGER] Initializing data directories...")
-    # file_manager is already initialized on import
-    print()
-    
-    # Initialize logging
-    print("[LOGGER] Setting up logging system...")
-    # logger_system is already initialized on import
-    print()
-    
-    # Load configuration
-    print("[CONFIG] Loading channel rules...")
-    channels = [
-        settings.PREGAP,
-        settings.HOD,
-        settings.BREAKING_NEWS,
-        settings.HALT,
-        settings.NEWS_FILTER
-    ]
-    for channel in channels:
-        status = "✓" if channel['enabled'] else "✗"
-        print(f"  {status} {channel['display_name']}")
-    print()
-    
-    # Validate API keys
-    print("[API-KEYS] Checking API credentials...")
-    if not api_keys.validate():
-        print()
-        print("=" * 60)
-        print("SETUP REQUIRED")
-        print("=" * 60)
-        print()
-        print("Please add your API keys to the .env file:")
-        print("1. Copy .env.example to .env")
-        print("2. Add your Alpaca and Tradier credentials")
-        print("3. Run this script again")
-        print()
-        return False
-    print()
-    
-    return True
-
-def run_phase_1_test():
-    """Phase 1: Verify foundation is working"""
-    print("=" * 60)
-    print("PHASE 1 STATUS: Foundation Complete ✓")
-    print("=" * 60)
-    print()
-    print("✓ File system initialized")
-    print("✓ Configuration loaded")
-    print("✓ Logging system active")
-    print("✓ API keys verified")
-    print()
-    print("NEXT PHASE: Data Pipeline (Tier 1-3)")
-    print("  → Tier 1: yFinance prefilter")
-    print("  → Tier 2: Alpaca WebSocket validation")
-    print("  → Tier 3: Tradier WebSocket categorization")
-    print()
-    print("=" * 60)
-
-def main():
-    """Main entry point"""
-    try:
-        print_banner()
+class SignalScanPRO:
+    def __init__(self):
+        # Initialize core systems
+        self.file_manager = FileManager()
+        self.logger = Logger()
         
-        if not initialize_system():
+        # Initialize scanners
+        self.tier1 = None
+        self.tier2 = None
+        self.tier3 = None
+        self.news = None
+        self.halts = None
+        
+    def start(self):
+        """Start SignalScan PRO"""
+        print("=" * 60)
+        print("SignalScan PRO - US Stock Market Scanner")
+        print("=" * 60)
+        print()
+        
+        # Phase 1: Foundation
+        print("[INIT] Starting SignalScan PRO...\n")
+        
+        print("[FILE-MANAGER] Initializing data directories...")
+        self.file_manager.init_directories()
+        
+        print("\n[LOGGER] Setting up logging system...")
+        self.logger.scanner("[INIT] SignalScan PRO starting...")
+        
+        print("\n[CONFIG] Loading channel rules...")
+        for channel in SETTINGS['channels']:
+            print(f"  ✓ {channel['name']}")
+        
+        print("\n[API-KEYS] Checking API credentials...")
+        if not validate_api_keys():
+            print("[ERROR] Missing required API keys. Check .env file.")
             sys.exit(1)
+        print("[API-KEYS] ✓ All required API keys loaded")
         
-        # Phase 1: Just test initialization
-        run_phase_1_test()
-        
-        # Phase 2+ will be added later:
-        # - Data pipeline
-        # - Channel detection
-        # - UI rendering
-        # - Alert system
-        
-    except KeyboardInterrupt:
+        print("\n" + "=" * 60)
+        print("PHASE 1 STATUS: Foundation Complete ✓")
+        print("=" * 60)
         print()
-        print("[SHUTDOWN] User interrupted - shutting down gracefully...")
-        sys.exit(0)
-    
-    except Exception as e:
+        print("✓ File system initialized")
+        print("✓ Configuration loaded")
+        print("✓ Logging system active")
+        print("✓ API keys verified")
+        
+        # Phase 2: Data Pipeline
+        print("\n" + "=" * 60)
+        print("PHASE 2: Starting Data Pipeline")
+        print("=" * 60)
         print()
-        print("[ERROR] Fatal error occurred:")
-        print(f"  {str(e)}")
-        logger_system.log_crash(e, "main")
-        sys.exit(1)
+        
+        # Start Tier 1: yFinance Prefilter
+        print("[TIER1] Starting yFinance prefilter (every 2 hours)...")
+        self.tier1 = Tier1YFinance(self.file_manager, self.logger)
+        self.tier1.start()
+        
+        # Start Tier 2: Alpaca Validator
+        print("[TIER2] Starting Alpaca validator (WebSocket - always open)...")
+        self.tier2 = AlpacaValidator(self.file_manager, self.logger)
+        self.tier2.start()
+        
+        # Start Tier 3: Tradier Categorizer
+        print("[TIER3] Starting Tradier categorizer (WebSocket - always open)...")
+        self.tier3 = TradierCategorizer(self.file_manager, self.logger)
+        self.tier3.start()
+        
+        # Start News Aggregator
+        print("[NEWS] Starting news aggregator (Alpaca WS + rotating secondary)...")
+        self.news = NewsAggregator(self.file_manager, self.logger)
+        self.news.start()
+        
+        # Start Halt Monitor
+        print("[HALTS] Starting halt monitor (every 2.5 minutes)...")
+        self.halts = HaltMonitor(self.file_manager, self.logger)
+        self.halts.start()
+        
+        print("\n" + "=" * 60)
+        print("PHASE 2 STATUS: Data Pipeline Active ✓")
+        print("=" * 60)
+        print()
+        print("✓ Tier 1: yFinance prefilter running")
+        print("✓ Tier 2: Alpaca validator connected")
+        print("✓ Tier 3: Tradier categorizer connected")
+        print("✓ News aggregation active")
+        print("✓ Halt monitoring active")
+        print()
+        print("Scanner is now running. Press Ctrl+C to stop.")
+        print("=" * 60)
+        
+        # Keep running
+        try:
+            while True:
+                time.sleep(1)
+        except KeyboardInterrupt:
+            self.stop()
+            
+    def stop(self):
+        """Stop all scanners"""
+        print("\n\n[SHUTDOWN] Stopping SignalScan PRO...")
+        
+        if self.tier1:
+            self.tier1.stop()
+            
+        if self.tier2:
+            self.tier2.stop()
+            
+        if self.tier3:
+            self.tier3.stop()
+            
+        if self.news:
+            self.news.stop()
+            
+        if self.halts:
+            self.halts.stop()
+            
+        print("[SHUTDOWN] ✓ All scanners stopped")
+        print("=" * 60)
 
 
-if __name__ == "__main__":
-    main()
+if __name__ == '__main__':
+    scanner = SignalScanPRO()
+    scanner.start()

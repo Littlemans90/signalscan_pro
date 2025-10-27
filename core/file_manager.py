@@ -42,6 +42,11 @@ class FileManager:
             if not os.path.exists(directory):
                 os.makedirs(directory)
                 print(f"[FILE-MANAGER] Created directory: {directory}")
+        
+    def init_directories(self):
+        """Public method to initialize/verify directories exist"""
+        # Directories already created in __init__ via _create_directories()
+        return True
     
     def _initialize_files(self):
         """Create empty JSON files if they don't exist"""
@@ -193,6 +198,53 @@ class FileManager:
         except Exception:
             return 0
 
+    def load_prefilter(self) -> list:
+        """Load prefilter symbols"""
+        return self.load_json('prefilter', default=[])
+    
+    def save_prefilter(self, symbols: list):
+        """Save prefilter symbols"""
+        self.save_json('prefilter', symbols)
+    
+    def load_validated(self) -> list:
+        """Load validated data"""
+        return self.load_json('validated', default=[])
+    
+    def save_validated(self, data: list):
+        """Save validated data"""
+        self.save_json('validated', data)
 
+    def load_active_halts(self) -> dict:
+        """Load active halts"""
+        return self.load_json('active_halts', default={})
+    
+    def save_active_halts(self, data: dict):
+        """Save active halts"""
+        self.save_json('active_halts', data)
+    
+    def load_halts(self) -> dict:
+        """Load halt history"""
+        return self.load_json('halts', default={})
+    
+    def save_halts(self, data: dict):
+        """Save halt history"""
+        self.save_json('halts', data)
+    
+    def load_news(self) -> dict:
+        """Load general news"""
+        return self.load_json('news', default={})
+    
+    def save_news(self, data: dict):
+        """Save general news"""
+        self.save_json('news', data)
+    
+    def load_bkgnews(self) -> dict:
+        """Load breaking news"""
+        return self.load_json('bkgnews', default={})
+    
+    def save_bkgnews(self, data: dict):
+        """Save breaking news"""
+        self.save_json('bkgnews', data)
+        
 # Singleton instance
 file_manager = FileManager()

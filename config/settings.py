@@ -193,6 +193,13 @@ class ChannelSettings:
         'min_price': 0.10,  # Exclude sub-$0.10 stocks
     }
 
-
-# Singleton instance
-settings = ChannelSettings()
+# Export for main.py compatibility
+SETTINGS = {
+    'channels': [
+        {'id': 'pregap', 'name': 'PreGap (Top Gapper)'},
+        {'id': 'hod', 'name': 'HOD (High of Day)'},
+        {'id': 'breaking_news', 'name': 'Breaking News'},
+        {'id': 'halt', 'name': 'Trading Halt'},
+        {'id': 'news', 'name': 'News (No Breaking)'}
+    ]
+}

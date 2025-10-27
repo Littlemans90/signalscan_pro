@@ -11,24 +11,15 @@ class Logger:
     """
     
     def __init__(self):
-        self.logs_dir = "logs"
+        self.LOGS_DIR = "logs"
+        self.loggers = {}
         
-        # Ensure logs directory exists
-        if not os.path.exists(self.logs_dir):
-            os.makedirs(self.logs_dir)
+        # Create logs directory if it doesn't exist
+        if not os.path.exists(self.LOGS_DIR):
+            os.makedirs(self.LOGS_DIR)
         
-        # Define log files
-        today = datetime.now().strftime('%Y%m%d')
-        self.log_files = {
-            'scanner': os.path.join(self.logs_dir, f'scanner_debug_{today}.log'),
-            'news': os.path.join(self.logs_dir, f'news_debug_{today}.log'),
-            'halt': os.path.join(self.logs_dir, f'halt_debug_{today}.log'),
-            'crash': os.path.join(self.logs_dir, f'crash_log_{today}.log')
-        }
-        
-        # Log initialization
-        for log_type, log_path in self.log_files.items():
-            print(f"[LOGGER] Logging {log_type} to: {log_path}")
+        # Set up default loggers
+        self._setup_loggers()
     
     def _setup_loggers(self):
         """Set up loggers for different components"""

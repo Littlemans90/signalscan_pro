@@ -62,3 +62,36 @@ class APIKeys:
 
 # Singleton instance
 api_keys = APIKeys()
+
+# Export as dictionary for scanners
+API_KEYS = {
+    'ALPACA_API_KEY': api_keys.ALPACA_API_KEY,
+    'ALPACA_SECRET_KEY': api_keys.ALPACA_SECRET_KEY,
+    'TRADIER_API_KEY': api_keys.TRADIER_ACCESS_TOKEN,
+    'POLYGON_API_KEY': getattr(api_keys, 'POLYGON_API_KEY', None),
+    'FINNHUB_API_KEY': getattr(api_keys, 'FINNHUB_API_KEY', None)
+}
+
+def validate_api_keys():
+    """
+    Validate that all required API keys are present.
+    Returns True if all keys exist, False otherwise.
+    """
+    required_keys = [
+        'ALPACA_API_KEY',
+        'ALPACA_SECRET_KEY',
+        'TRADIER_ACCESS_TOKEN'
+    ]
+    
+    missing_keys = []
+    
+    for key in required_keys:
+        # Check if attribute exists and is not empty
+        if not hasattr(api_keys, key) or not getattr(api_keys, key):
+            missing_keys.append(key)
+    
+    if missing_keys:
+        print(f"[ERROR] Missing API keys: {', '.join(missing_keys)}")
+        return False
+    
+    return True
