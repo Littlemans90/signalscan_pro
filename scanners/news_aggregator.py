@@ -12,14 +12,19 @@ import requests
 from datetime import datetime, timedelta
 from threading import Thread, Event
 from alpaca.data.live import NewsDataStream
+from PyQt5.QtCore import QObject, pyqtSignal
 from core.file_manager import FileManager
 from core.logger import Logger
 from config.api_keys import API_KEYS
 from config.keywords import categorize_news_by_age, should_exclude
 
 
-class NewsAggregator:
+class NewsAggregator(QObject):
+    # PyQt5 signal for live GUI updates
+    news_signal = pyqtSignal(dict)
+    
     def __init__(self, file_manager: FileManager, logger: Logger):
+        super().__init__()  # Initialize QObject
         self.fm = file_manager
         self.log = logger
         self.stop_event = Event()
@@ -250,7 +255,7 @@ class NewsAggregator:
         return []
             
     def _process_news_item(self, item: dict, provider: str):
-        """Process a single news item (de-duplicate and categorize)"""
+        """Process a single news item (de-duplicate and categorize) and emit to GUI"""
         try:
             news_id = item['news_id']
             
@@ -273,6 +278,16 @@ class NewsAggregator:
             # Categorize by age and keywords
             category = categorize_news_by_age(headline, age_hours)
             
+            # Prepare GUI data
+            gui_data = {
+                'symbol': item['symbol'],
+                'price': 0.0,  # Price will be updated by market data
+                'change_pct': 0.0,  # Change will be updated by market data
+                'headline': headline,
+                'age': f"{int(age_hours)}h" if age_hours < 24 else f"{int(age_hours/24)}d",
+                'timestamp': item['timestamp']
+            }
+            
             if category == 'breaking':
                 # Save to bkgnews.json
                 bkgnews = self.fm.load_bkgnews()
@@ -284,6 +299,9 @@ class NewsAggregator:
                 self.fm.save_bkgnews(bkgnews)
                 self.log.news(f"[NEWS-AGGREGATOR] 🔵 BREAKING: {item['symbol']} - {headline[:50]}...")
                 
+                # Emit signal to GUI
+                self.news_signal.emit(gui_data)
+                
             elif category == 'general':
                 # Save to news.json
                 news = self.fm.load_news()
@@ -294,6 +312,9 @@ class NewsAggregator:
                 }
                 self.fm.save_news(news)
                 self.log.news(f"[NEWS-AGGREGATOR] 🟡 NEWS: {item['symbol']} - {headline[:50]}...")
+                
+                # Emit signal to GUI
+                self.news_signal.emit(gui_data)
                 
         except Exception as e:
             self.log.crash(f"[NEWS-AGGREGATOR] Error processing news item: {e}")

@@ -94,6 +94,11 @@ class Tier1YFinance:
         self.log.scanner(f"[TIER1-YFINANCE] ✓ Filtered: {len(filtered)}/{total} tickers passed")
         return filtered
     
+    def force_scan(self):
+        """Force an immediate prefilter scan."""
+        self.log.scanner("[TIER1-YFINANCE] Force scan triggered by GUI")
+        self._run_scan()
+
     def run_scan(self):
         """Run single scan cycle"""
         self.log.scanner("[TIER1-YFINANCE] Starting prefilter scan...")

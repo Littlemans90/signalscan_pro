@@ -9,12 +9,17 @@ import json
 from datetime import datetime
 import time
 from threading import Thread, Event
+from PyQt5.QtCore import QObject, pyqtSignal
 from core.file_manager import FileManager
 from core.logger import Logger
 
 
-class HaltMonitor:
+class HaltMonitor(QObject):
+    # PyQt5 signal for live GUI updates
+    halt_signal = pyqtSignal(dict)
+    
     def __init__(self, file_manager: FileManager, logger: Logger):
+        super().__init__()  # Initialize QObject
         self.fm = file_manager
         self.log = logger
         self.stop_event = Event()
@@ -109,9 +114,10 @@ class HaltMonitor:
                             'halt_time': pub_date,
                             'resume_time': None if is_halted else pub_date,
                             'reason': description,
-                            'status': 'halted' if is_halted else 'resumed',
+                            'status': 'HALTED' if is_halted else 'RESUMED',
                             'exchange': 'NASDAQ',
-                            'timestamp': datetime.utcnow().isoformat()
+                            'timestamp': datetime.utcnow().isoformat(),
+                            'price': 0.0  # Price will be updated by market data
                         }
                         
                 except Exception as e:
@@ -125,21 +131,24 @@ class HaltMonitor:
             return {}
             
     def _process_halts(self, halts: dict):
-        """Process halt data and update files"""
+        """Process halt data, update files, and emit signals to GUI"""
         try:
             # Load existing data
             active_halts = self.fm.load_active_halts()
             historical_halts = self.fm.load_halts()
             
             for symbol, halt_data in halts.items():
-                status = halt_data.get('status', 'halted')
+                status = halt_data.get('status', 'HALTED')
                 
-                if status == 'halted':
+                if status == 'HALTED':
                     # Add to active halts
                     active_halts[symbol] = halt_data
                     self.log.halt(f"[HALT-MONITOR] 🔴 HALTED: {symbol} - {halt_data.get('reason', 'Unknown')[:50]}")
                     
-                elif status == 'resumed':
+                    # Emit signal to GUI
+                    self.halt_signal.emit(halt_data)
+                    
+                elif status == 'RESUMED':
                     # Move from active to historical
                     if symbol in active_halts:
                         del active_halts[symbol]
@@ -148,6 +157,9 @@ class HaltMonitor:
                     halt_id = f"{symbol}_{int(time.time())}"
                     historical_halts[halt_id] = halt_data
                     self.log.halt(f"[HALT-MONITOR] 🟢 RESUMED: {symbol}")
+                    
+                    # Emit signal to GUI
+                    self.halt_signal.emit(halt_data)
                     
             # Save updated data
             self.fm.save_active_halts(active_halts)

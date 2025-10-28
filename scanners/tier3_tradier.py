@@ -10,14 +10,22 @@ import time
 import websocket
 from threading import Thread, Event
 from datetime import datetime
+from PyQt5.QtCore import QObject, pyqtSignal
 from core.file_manager import FileManager
 from core.logger import Logger
 from config.api_keys import API_KEYS
 from .channel_detector import ChannelDetector
 
 
-class TradierCategorizer:
+class TradierCategorizer(QObject):
+    # PyQt5 signals for live GUI updates
+    pregap_signal = pyqtSignal(dict)
+    hod_signal = pyqtSignal(dict)
+    runup_signal = pyqtSignal(dict)
+    reversal_signal = pyqtSignal(dict)
+    
     def __init__(self, file_manager: FileManager, logger: Logger):
+        super().__init__()  # Initialize QObject
         self.fm = file_manager
         self.log = logger
         self.stop_event = Event()
@@ -149,6 +157,7 @@ class TradierCategorizer:
         self.log.scanner("[TIER3-TRADIER] WebSocket opened")
         
     def _on_message(self, ws, message):
+        self.log.scanner(f"[TIER3-TRADIER] Received message: {message[:200]}")
         """Handle incoming WebSocket message"""
         try:
             data = json.loads(message)
@@ -179,24 +188,36 @@ class TradierCategorizer:
             self._connect_websocket()
         
     def _update_subscriptions(self, symbols: set):
-        """Subscribe to new symbols"""
+        """
+        Subscribe to new symbols in Tradier WebSocket in safe chunks (max 50 per batch).
+        Filters out invalid symbols.
+        """
         new_symbols = symbols - self.subscribed_symbols
-        
         if new_symbols and self.ws and self.session_id:
-            self.log.scanner(f"[TIER3-TRADIER] Subscribing to {len(new_symbols)} new symbols")
-            
-            # Subscribe via WebSocket
-            subscribe_msg = {
-                "symbols": list(new_symbols),
-                "sessionid": self.session_id,
-                "filter": ["quote", "trade"]
-            }
-            
-            self.ws.send(json.dumps(subscribe_msg))
-            
-            self.subscribed_symbols.update(new_symbols)
+            # Filter out invalid symbols for Tradier
+            symbol_list = [
+                s for s in new_symbols
+                if s and s.isalpha() and 0 < len(s) <= 5
+            ]
+            max_per_batch = 50  # Tradier's per-request symbol limit
+
+            for i in range(0, len(symbol_list), max_per_batch):
+                batch = symbol_list[i:i+max_per_batch]
+                self.log.scanner(f"[TIER3-TRADIER] Subscribing to batch: {batch}")
+                subscribe_msg = {
+                    "symbols": batch,
+                    "sessionid": self.session_id,
+                    "filter": ["quote", "trade"]
+                }
+                try:
+                    self.ws.send(json.dumps(subscribe_msg))
+                except Exception as e:
+                    self.log.crash(f"[TIER3-TRADIER] Error subscribing batch: {e}")
+
+            self.subscribed_symbols.update(symbol_list)
             
     def _handle_quote(self, data: dict):
+        self.log.scanner(f"[TIER3-TRADIER] Handling QUOTE: {data.get('symbol')}")
         """Handle real-time quote"""
         try:
             symbol = data.get('symbol')
@@ -217,13 +238,14 @@ class TradierCategorizer:
                 'last_update': datetime.utcnow().isoformat()
             })
             
-            # Detect channel
+            # Detect channel and emit signal
             self._categorize_symbol(symbol)
             
         except Exception as e:
             self.log.crash(f"[TIER3-TRADIER] Error handling quote: {e}")
             
     def _handle_trade(self, data: dict):
+        self.log.scanner(f"[TIER3-TRADIER] Handling TRADE: {data.get('symbol')}")
         """Handle real-time trade"""
         try:
             symbol = data.get('symbol')
@@ -240,14 +262,14 @@ class TradierCategorizer:
                 'timestamp': datetime.utcnow().isoformat()
             })
             
-            # Detect channel
+            # Detect channel and emit signal
             self._categorize_symbol(symbol)
             
         except Exception as e:
             self.log.crash(f"[TIER3-TRADIER] Error handling trade: {e}")
             
     def _categorize_symbol(self, symbol: str):
-        """Categorize symbol into appropriate channel"""
+        """Categorize symbol into appropriate channel and emit signal to GUI"""
         try:
             stock_data = self.live_data.get(symbol, {})
             
@@ -259,6 +281,16 @@ class TradierCategorizer:
                 if symbol not in self.channels[channel]:
                     self.channels[channel].append(symbol)
                     self.log.scanner(f"[TIER3-TRADIER] ✓ {symbol} → {channel.upper()}")
+                
+                # Emit signal to GUI based on channel
+                if channel == 'pregap':
+                    self.pregap_signal.emit(stock_data)
+                elif channel == 'hod':
+                    self.hod_signal.emit(stock_data)
+                elif channel == 'runup':
+                    self.runup_signal.emit(stock_data)
+                elif channel == 'rvsl':
+                    self.reversal_signal.emit(stock_data)
                     
         except Exception as e:
             self.log.crash(f"[TIER3-TRADIER] Error categorizing {symbol}: {e}")
