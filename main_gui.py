@@ -15,7 +15,7 @@ from core.logger import Logger
 from config.settings import SETTINGS
 from config.api_keys import validate_api_keys
 from scanners import (
-    Tier1YFinance,
+    Tier1Alpaca,
     AlpacaValidator,
     TradierCategorizer,
     NewsAggregator,
@@ -82,9 +82,9 @@ class SignalScanPRO:
         print("=" * 60)
         print()
         
-        # Start Tier 1: yFinance Prefilter
-        print("[TIER1] Starting yFinance prefilter (every 2 hours)...")
-        self.tier1 = Tier1YFinance(self.file_manager, self.logger)
+        # Start Tier 1: Alpaca Prefilter
+        print("[TIER1] Starting Alpaca prefilter (every 2 hours)...")
+        self.tier1 = Tier1Alpaca(self.file_manager, self.logger)
         self.tier1.start()
         
         # Start Tier 2: Alpaca Validator
@@ -124,17 +124,25 @@ class SignalScanPRO:
     def _launch_gui(self):
         """Launch the PyQt5 GUI and connect live data feeds"""
         self.app = QApplication(sys.argv)
-        self.main_window = MainWindow(self.file_manager, self.logger)
-        
+        self.logger.scanner("[GUI-DEBUG] QApplication created")
+        self.logger.scanner("[GUI-DEBUG] About to create MainWindow")
+        self.main_window = MainWindow(self.file_manager, self.logger, tier1=None)
+        self.logger.scanner("[GUI-DEBUG] MainWindow created successfully")
+
         # Connect scanner signals to GUI for live updates
         print("[GUI] Connecting live data feeds...")
+        self.logger.scanner("[GUI-DEBUG] About to connect scanner signals")
         self.main_window.connect_scanner_signals(self.tier3, self.news, self.halts)
-        
+        self.logger.scanner("[GUI-DEBUG] Scanner signals connected")
+
+        self.logger.scanner("[GUI-DEBUG] About to call show()")
         self.main_window.show()
-        
+        self.logger.scanner("[GUI-DEBUG] show() completed")
+
         print("[GUI] ✓ GUI launched successfully")
         print("[GUI] ✓ Live data feeds connected")
         print("\n" + "=" * 60)
+    
         print("SignalScan PRO is running!")
         print("=" * 60)
         print()

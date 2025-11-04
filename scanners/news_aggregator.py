@@ -44,6 +44,9 @@ class NewsAggregator(QObject):
             'alphavantage',
             'finnhub'
         ]
+
+        self.cleanup_thread = None
+
         self.current_provider_index = 0
         
         # Alpaca News WebSocket
@@ -64,6 +67,10 @@ class NewsAggregator(QObject):
         # Start secondary (rotating providers)
         self.secondary_thread = Thread(target=self._run_secondary, daemon=True)
         self.secondary_thread.start()
+
+        # Start cleanup thread (runs every 30 minutes)
+        self.cleanup_thread = Thread(target=self._run_cleanup, daemon=True)
+        self.cleanup_thread.start()
         
     def stop(self):
         """Stop news aggregation"""
@@ -71,14 +78,21 @@ class NewsAggregator(QObject):
         self.stop_event.set()
         
         if self.news_stream:
-            self.news_stream.close()
-            
+            try:
+                import asyncio
+                asyncio.run(self.news_stream.close())
+            except Exception:
+                pass
+
         if self.primary_thread:
             self.primary_thread.join(timeout=5)
             
         if self.secondary_thread:
             self.secondary_thread.join(timeout=5)
-            
+
+        if self.cleanup_thread:
+            self.cleanup_thread.join(timeout=5)
+
     def _run_primary(self):
         """Primary: Alpaca News WebSocket (always open)"""
         try:
@@ -88,7 +102,7 @@ class NewsAggregator(QObject):
             self.news_stream = NewsDataStream(self.alpaca_key, self.alpaca_secret)
         
             # Subscribe to all news with SYNCHRONOUS handler
-            def news_handler(news):
+            async def news_handler(news):
                 self._handle_alpaca_news(news)
         
             self.news_stream.subscribe_news(news_handler, '*')
@@ -285,7 +299,8 @@ class NewsAggregator(QObject):
                 'change_pct': 0.0,  # Change will be updated by market data
                 'headline': headline,
                 'age': f"{int(age_hours)}h" if age_hours < 24 else f"{int(age_hours/24)}d",
-                'timestamp': item['timestamp']
+                'timestamp': item['timestamp'],
+                'category': category
             }
             
             if category == 'breaking':
@@ -318,7 +333,80 @@ class NewsAggregator(QObject):
                 
         except Exception as e:
             self.log.crash(f"[NEWS-AGGREGATOR] Error processing news item: {e}")
+
+    def _cleanup_old_news(self):
+        """Move aged breaking news to general, delete news >72 hours old"""
+        try:
+            from datetime import datetime, timezone
+        
+            # Load both files
+            bkgnews = self.fm.load_bkgnews()
+            news = self.fm.load_news()
+        
+            now = datetime.now(timezone.utc)
+        
+            # Check breaking news
+            expired_breaking = []
+            for news_id, item in bkgnews.items():
+                try:
+                    timestamp = datetime.fromisoformat(item['timestamp'].replace('Z', '+00:00'))
+                    age_hours = (now - timestamp).total_seconds() / 3600
+                
+                    if age_hours > 72:
+                        # Too old, delete entirely
+                        expired_breaking.append(news_id)
+                        self.log.news(f"[NEWS-CLEANUP] Deleted expired breaking: {item['symbol']} ({age_hours:.1f}h old)")
+                    elif age_hours > 2:
+                        # Move to general news
+                        item['category'] = 'general'
+                        item['age_hours'] = age_hours
+                        news[news_id] = item
+                        expired_breaking.append(news_id)
+                        self.log.news(f"[NEWS-CLEANUP] Moved to general: {item['symbol']} ({age_hours:.1f}h old)")
+                except Exception as e:
+                    self.log.crash(f"[NEWS-CLEANUP] Error processing {news_id}: {e}")
+        
+            # Remove from breaking news
+            for news_id in expired_breaking:
+                del bkgnews[news_id]
+        
+            # Check general news
+            expired_general = []
+            for news_id, item in news.items():
+                try:
+                    timestamp = datetime.fromisoformat(item['timestamp'].replace('Z', '+00:00'))
+                    age_hours = (now - timestamp).total_seconds() / 3600
+                
+                    if age_hours > 72:
+                        expired_general.append(news_id)
+                        self.log.news(f"[NEWS-CLEANUP] Deleted expired general: {item['symbol']} ({age_hours:.1f}h old)")
+                except Exception as e:
+                    self.log.crash(f"[NEWS-CLEANUP] Error processing {news_id}: {e}")
+        
+            # Remove expired general news
+            for news_id in expired_general:
+                del news[news_id]
+        
+            # Save updated files
+            self.fm.save_bkgnews(bkgnews)
+            self.fm.save_news(news)
+        
+            if expired_breaking or expired_general:
+                self.log.news(f"[NEWS-CLEANUP] Moved {len([x for x in expired_breaking if x not in expired_general])} to general, deleted {len([x for x in expired_breaking if x in expired_general]) + len(expired_general)} total")
             
+        except Exception as e:
+            self.log.crash(f"[NEWS-CLEANUP] Error during cleanup: {e}")
+
+    def _run_cleanup(self):
+        """Cleanup old news every 30 minutes"""
+        while not self.stop_event.is_set():
+            try:
+                self._cleanup_old_news()
+                self.stop_event.wait(1800)  # 30 minutes
+            except Exception as e:
+                self.log.crash(f"[NEWS-CLEANUP] Cleanup thread error: {e}")
+                self.stop_event.wait(1800)
+
     def _rotate_provider(self):
         """Rotate to next secondary provider"""
         self.current_provider_index = (self.current_provider_index + 1) % len(self.secondary_providers)

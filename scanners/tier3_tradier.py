@@ -45,6 +45,12 @@ class TradierCategorizer(QObject):
         # Channel detector
         self.detector = ChannelDetector(logger)
         
+        # Track previous data for calculations
+        self.prev_closes = {}
+        self.day_opens = {}
+        self.day_highs = {}
+        self.price_history = {}
+        
         # Categorized stocks by channel
         self.channels = {
             'pregap': [],
@@ -120,7 +126,7 @@ class TradierCategorizer(QObject):
             data = response.json()
             
             self.session_id = data['stream']['sessionid']
-            self.log.scanner(f"[TIER3-TRADIER] ✓ Got session ID: {self.session_id}")
+            self.log.scanner(f"[TIER3-TRADIER] Got session ID: {self.session_id}")
             
         except Exception as e:
             self.log.crash(f"[TIER3-TRADIER] Error getting session ID: {e}")
@@ -147,7 +153,7 @@ class TradierCategorizer(QObject):
             )
             ws_thread.start()
         
-            self.log.scanner("[TIER3-TRADIER] ✓ WebSocket connected")
+            self.log.scanner("[TIER3-TRADIER] WebSocket connected")
         
         except Exception as e:
             self.log.crash(f"[TIER3-TRADIER] Error connecting WebSocket: {e}")
@@ -249,29 +255,114 @@ class TradierCategorizer(QObject):
         """Handle real-time trade"""
         try:
             symbol = data.get('symbol')
-            
+        
             if not symbol:
                 return
-                
+            
             if symbol not in self.live_data:
                 self.live_data[symbol] = {}
-                
+        
+            # Convert price to float
+            price = data.get('price')
+            if price:
+                price = float(price)
+            
             self.live_data[symbol].update({
-                'price': data.get('price'),
+                'price': price,
                 'volume': data.get('size'),
                 'timestamp': datetime.utcnow().isoformat()
             })
-            
+        
             # Detect channel and emit signal
             self._categorize_symbol(symbol)
-            
+        
         except Exception as e:
             self.log.crash(f"[TIER3-TRADIER] Error handling trade: {e}")
+
+    def _enrich_stock_data(self, symbol: str, live_data: dict) -> dict:
+        """Calculate all fields needed for channel detection"""
+        try:
+            validated = self.fm.load_validated()
+            validated_data = next((s for s in validated if s.get('symbol') == symbol), {})
+            enriched = {**validated_data, **live_data}
             
+            price = live_data.get('price')
+            if not price:
+                bid = enriched.get('bid', 0)
+                ask = enriched.get('ask', 0)
+                price = (bid + ask) / 2 if bid and ask else 0
+            enriched['price'] = price
+            
+            prev_close = self.prev_closes.get(symbol, price)
+            if prev_close > 0:
+                enriched['gap_pct'] = ((price - prev_close) / prev_close) * 100
+            else:
+                enriched['gap_pct'] = 0
+            
+            current_high = self.day_highs.get(symbol, price)
+            if price > current_high:
+                self.day_highs[symbol] = price
+                enriched['is_hod'] = True
+            else:
+                enriched['is_hod'] = False
+            enriched['hod_price'] = self.day_highs.get(symbol, price)
+            
+            current_vol = live_data.get('volume', 0)
+            avg_vol = enriched.get('volume_avg', 1000000)
+            enriched['rvol'] = current_vol / avg_vol if avg_vol > 0 else 0
+            
+            now = datetime.utcnow()
+            if symbol not in self.price_history:
+                self.price_history[symbol] = []
+            self.price_history[symbol].append((now, price))
+            
+            cutoff = now.timestamp() - 900
+            self.price_history[symbol] = [(ts, p) for ts, p in self.price_history[symbol] if ts.timestamp() > cutoff]
+            
+            five_min_ago = now.timestamp() - 300
+            old_prices = [p for ts, p in self.price_history[symbol] if ts.timestamp() <= five_min_ago]
+            if old_prices:
+                old_price = old_prices[-1]
+                enriched['move_5min'] = ((price - old_price) / old_price) * 100 if old_price > 0 else 0
+            else:
+                enriched['move_5min'] = 0
+            
+            ten_min_ago = now.timestamp() - 600
+            old_prices_10 = [p for ts, p in self.price_history[symbol] if ts.timestamp() <= ten_min_ago]
+            if old_prices_10:
+                old_price = old_prices_10[-1]
+                enriched['move_10min'] = ((price - old_price) / old_price) * 100 if old_price > 0 else 0
+            else:
+                enriched['move_10min'] = 0
+            
+            enriched['rvol_5min'] = enriched['rvol']
+            enriched['float'] = enriched.get('float', 50000000)
+            
+            bkgnews = self.fm.load_bkgnews()
+            enriched['has_breaking_news'] = symbol in bkgnews
+            if enriched['has_breaking_news']:
+                news_ts = bkgnews[symbol].get('timestamp', '')
+                try:
+                    news_time = datetime.fromisoformat(news_ts.replace('Z', '+00:00'))
+                    age_hours = (datetime.now(news_time.tzinfo) - news_time).total_seconds() / 3600
+                    enriched['news_age_hours'] = age_hours
+                except:
+                    enriched['news_age_hours'] = 999
+            else:
+                enriched['news_age_hours'] = 999
+            
+            return enriched
+        except Exception as e:
+            self.log.crash(f"[TIER3] Error enriching {symbol}: {e}")
+            return live_data
+   
     def _categorize_symbol(self, symbol: str):
         """Categorize symbol into appropriate channel and emit signal to GUI"""
         try:
-            stock_data = self.live_data.get(symbol, {})
+            live_data = self.live_data.get(symbol, {})
+            
+            # Enrich with calculated fields
+            stock_data = self._enrich_stock_data(symbol, live_data)
             
             # Detect channel
             channel = self.detector.detect_channel(stock_data)
