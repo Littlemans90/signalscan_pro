@@ -21,11 +21,12 @@ import os
 class MainWindow(QMainWindow):
     """Main application window for SignalScan PRO"""
     
-    def __init__(self, file_manager, logger):
+    def __init__(self, file_manager, logger, tier1=None):
         super().__init__()
         self.fm = file_manager
         self.tier1 = tier1
         self.log = logger
+        self.log.scanner("[GUI-DEBUG] MainWindow.__init__ started")
         
         # Window setup - Made wider to fit all tabs
         self.setWindowTitle("SignalScan PRO - US Stock Market Scanner")
@@ -41,6 +42,7 @@ class MainWindow(QMainWindow):
         
     def _init_ui(self):
         """Initialize the user interface"""
+        self.log.scanner("[GUI-DEBUG] _init_ui started")
         # Central widget
         central_widget = QWidget()
         self.setCentralWidget(central_widget)
@@ -285,7 +287,7 @@ class MainWindow(QMainWindow):
         # Indices update timer (every 5 seconds)
         indices_timer = QTimer(self)
         indices_timer.timeout.connect(self._update_indices)
-        indices_timer.start(5000)
+        indices_timer.start(30000)
         
         panel.setStyleSheet("background-color: #1e1e1e; padding: 10px;")
         return panel
@@ -463,35 +465,36 @@ class MainWindow(QMainWindow):
     
     def connect_scanner_signals(self, tier3, news, halts):
         """Connect scanner signals to GUI slots for live updates"""
-        self.tier1 = tier1
+        self.log.scanner("[GUI-DEBUG] Entering connect_scanner_signals function")
+        self.log.scanner(f"[GUI-DEBUG] tier3={tier3}, news={news}, halts={halts}")
         self.log.scanner("[GUI] Connecting live data feeds...")
 
         # Connect Tier3 channel signals (LIVE ONLY)
         if tier3 and hasattr(tier3, 'pregap_signal'):
             tier3.pregap_signal.connect(self.on_pregap_update)
-            self.log.scanner("[GUI] ✓ PreGap feed connected (LIVE)")
+            self.log.scanner("[GUI] OK PreGap feed connected (LIVE)")
         
         if tier3 and hasattr(tier3, 'hod_signal'):
             tier3.hod_signal.connect(self.on_hod_update)
-            self.log.scanner("[GUI] ✓ HOD feed connected (LIVE)")
+            self.log.scanner("[GUI] OK HOD feed connected (LIVE)")
         
         if tier3 and hasattr(tier3, 'runup_signal'):
             tier3.runup_signal.connect(self.on_runup_update)
-            self.log.scanner("[GUI] ✓ RunUP feed connected (LIVE)")
+            self.log.scanner("[GUI] OK RunUP feed connected (LIVE)")
         
         if tier3 and hasattr(tier3, 'reversal_signal'):
             tier3.reversal_signal.connect(self.on_reversal_update)
-            self.log.scanner("[GUI] ✓ Reversal feed connected (LIVE)")
+            self.log.scanner("[GUI] OK Reversal feed connected (LIVE)")
         
         # Connect News signal (VAULT + LIVE)
         if news and hasattr(news, 'news_signal'):
             news.news_signal.connect(self.on_news_update)
-            self.log.scanner("[GUI] ✓ News feed connected (VAULT + LIVE)")
+            self.log.scanner("[GUI] OK News feed connected (VAULT + LIVE)")
         
         # Connect Halt signal (VAULT + LIVE)
         if halts and hasattr(halts, 'halt_signal'):
             halts.halt_signal.connect(self.on_halt_update)
-            self.log.scanner("[GUI] ✓ Halt feed connected (VAULT + LIVE)")
+            self.log.scanner("[GUI] OK Halt feed connected (VAULT + LIVE)")
         
         # Load existing news and halts from vault on startup
         self._load_existing_news()
@@ -521,17 +524,25 @@ class MainWindow(QMainWindow):
     def _refresh_news_vault(self):
         """Refresh news table from vault files (bkgnews.json + news.json), with breaking news age filter."""
         try:
+            self.log.scanner("=" * 80)
+            self.log.scanner("[GUI-DEBUG] _refresh_news_vault() CALLED")
+            self.log.scanner("=" * 80)
+            
             self.news_table.setRowCount(0)
 
             # Load breaking news (bkgnews.json)
             bkgnews = self.fm.load_bkgnews()
+            self.log.scanner(f"[GUI-DEBUG] Loaded bkgnews: {len(bkgnews)} items")
+            
             # Load general news (news.json)
             news = self.fm.load_news()
+            self.log.scanner(f"[GUI-DEBUG] Loaded news: {len(news)} items")
 
             # Combine all news
             all_news = {}
             all_news.update(bkgnews)
             all_news.update(news)
+            self.log.scanner(f"[GUI-DEBUG] Combined news: {len(all_news)} items")
 
             # Sort by timestamp (newest first)
             sorted_news = sorted(
@@ -540,23 +551,39 @@ class MainWindow(QMainWindow):
                 reverse=True
             )
 
-            now = datetime.now()
+            from datetime import timezone
+            now = datetime.now(timezone.utc)
+            self.log.scanner(f"[GUI-DEBUG] Current time (UTC): {now}")
+            
             shown = 0
+            filtered_breaking = 0
+            filtered_general = 0
+            
             for news_id, news_item in sorted_news:
                 # Calculate age
                 try:
                     timestamp = datetime.fromisoformat(news_item['timestamp'].replace('Z', '+00:00'))
                     age_hours = (now - timestamp).total_seconds() / 3600
                     age_str = f"{int(age_hours)}h" if age_hours < 24 else f"{int(age_hours/24)}d"
-                except Exception:
+                    self.log.scanner(f"[GUI-DEBUG] {news_item.get('symbol')}: age={age_hours:.2f}h, category={news_item.get('category')}")
+                except Exception as e:
+                    self.log.scanner(f"[GUI-DEBUG] ERROR calculating age for {news_id}: {e}")
                     age_hours = 999
                     age_str = "N/A"
 
                 # Only show breaking news ≤2hr, general news ≤72hr
                 category = news_item.get('category', '')
-                if (category == 'breaking' and age_hours > 2) or (category == 'general' and age_hours > 72):
+                if category == 'breaking' and age_hours > 2:
+                    filtered_breaking += 1
+                    self.log.scanner(f"[GUI-DEBUG] FILTERED OUT (breaking too old): {news_item.get('symbol')} - {age_hours:.2f}h")
+                    continue
+                if category == 'general' and age_hours > 72:
+                    filtered_general += 1
+                    self.log.scanner(f"[GUI-DEBUG] FILTERED OUT (general too old): {news_item.get('symbol')} - {age_hours:.2f}h")
                     continue
 
+                self.log.scanner(f"[GUI-DEBUG] SHOWING: {news_item.get('symbol')} - {news_item.get('headline')[:50]}")
+                
                 gui_data = {
                     'symbol': news_item.get('symbol', 'N/A'),
                     'price': 0.0,
@@ -568,9 +595,13 @@ class MainWindow(QMainWindow):
                 self.on_news_update(gui_data)
                 shown += 1
 
-            self.log.scanner(f"[GUI] ✓ News vault loaded: {shown} fresh items")
+            self.log.scanner(f"[GUI-DEBUG] SUMMARY: shown={shown}, filtered_breaking={filtered_breaking}, filtered_general={filtered_general}")
+            self.log.scanner(f"[GUI] OK News vault loaded: {shown} fresh items")
 
         except Exception as e:
+            self.log.scanner(f"[GUI-DEBUG] EXCEPTION in _refresh_news_vault: {e}")
+            import traceback
+            self.log.scanner(traceback.format_exc())
             self.log.crash(f"[GUI] Error refreshing news vault: {e}")
     
     def _refresh_halt_vault(self):
@@ -595,7 +626,7 @@ class MainWindow(QMainWindow):
                 self.on_halt_update(halt_data)
             
             if len(all_halts) > 0:
-                self.log.scanner(f"[GUI] ✓ Halt vault refreshed: {len(all_halts)} items")
+                self.log.scanner(f"[GUI] OK Halt vault refreshed: {len(all_halts)} items")
             
         except Exception as e:
             self.log.crash(f"[GUI] Error refreshing halt vault: {e}")
