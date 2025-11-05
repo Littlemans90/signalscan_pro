@@ -9,6 +9,7 @@ from .tier3_tradier import TradierCategorizer
 from .news_aggregator import NewsAggregator
 from .halt_monitor import HaltMonitor
 from .channel_detector import ChannelDetector
+from .tier2_halts import NasdaqHaltScanner
 
 __all__ = [
     'Tier1Alpaca',

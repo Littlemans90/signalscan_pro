@@ -11,11 +11,11 @@ from core.logger import Logger
 from config.settings import SETTINGS
 from config.api_keys import validate_api_keys
 from scanners import (
-    Tier1YFinance,
+    Tier1Alpaca,
     AlpacaValidator,
     TradierCategorizer,
     NewsAggregator,
-    HaltMonitor
+    NasdaqHaltScanner
 )
 
 
@@ -73,9 +73,9 @@ class SignalScanPRO:
         print("=" * 60)
         print()
         
-        # Start Tier 1: yFinance Prefilter
-        print("[TIER1] Starting yFinance prefilter (every 2 hours)...")
-        self.tier1 = Tier1YFinance(self.file_manager, self.logger)
+        # Start Tier 1: Alpaca Prefilter
+        print("[TIER1] Starting Alpaca prefilter (6:30 AM, 9:30 AM, 1:30 PM EST)...")
+        self.tier1 = Tier1Alpaca(self.file_manager, self.logger)
         self.tier1.start()
         
         # Start Tier 2: Alpaca Validator
@@ -93,20 +93,20 @@ class SignalScanPRO:
         self.news = NewsAggregator(self.file_manager, self.logger)
         self.news.start()
         
-        # Start Halt Monitor
-        print("[HALTS] Starting halt monitor (every 2.5 minutes)...")
-        self.halts = HaltMonitor(self.file_manager, self.logger)
+        # Start NASDAQ Halt Scanner
+        print("[HALTS] Starting NASDAQ halt scanner (every 30 seconds)...")
+        self.halts = NasdaqHaltScanner(self.file_manager, self.logger)
         self.halts.start()
         
         print("\n" + "=" * 60)
         print("PHASE 2 STATUS: Data Pipeline Active ✓")
         print("=" * 60)
         print()
-        print("✓ Tier 1: yFinance prefilter running")
+        print("✓ Tier 1: Alpaca prefilter running")
         print("✓ Tier 2: Alpaca validator connected")
         print("✓ Tier 3: Tradier categorizer connected")
         print("✓ News aggregation active")
-        print("✓ Halt monitoring active")
+        print("✓ NASDAQ halt scanner active")
         print()
         print("Scanner is now running. Press Ctrl+C to stop.")
         print("=" * 60)

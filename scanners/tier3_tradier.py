@@ -66,7 +66,36 @@ class TradierCategorizer(QObject):
         self.stop_event.clear()
         self.thread = Thread(target=self._run_loop, daemon=True)
         self.thread.start()
-        
+    
+        # Start daily volume reset thread
+        reset_thread = Thread(target=self._daily_reset_loop, daemon=True)
+        reset_thread.start()
+
+    def _daily_reset_loop(self):
+        """Reset volume counters at 9:30 AM EST every day"""
+        import pytz
+        est = pytz.timezone('America/New_York')
+    
+        while not self.stop_event.is_set():
+            try:
+                now = datetime.now(est)
+            
+                # Check if it's 9:30 AM
+                if now.hour == 9 and now.minute == 30:
+                    self.log.scanner("[TIER3-TRADIER] Resetting daily volume counters")
+                    for symbol in self.live_data:
+                        self.live_data[symbol]['volume'] = 0
+                
+                    # Sleep 61 seconds to avoid running multiple times in same minute
+                    time.sleep(61)
+                else:
+                    # Check every 30 seconds
+                    time.sleep(30)
+                
+            except Exception as e:
+                self.log.crash(f"[TIER3-TRADIER] Error in daily reset: {e}")
+                time.sleep(60)
+
     def stop(self):
         """Stop the categorizer"""
         self.log.scanner("[TIER3-TRADIER] Stopping Tradier categorizer")
@@ -94,12 +123,19 @@ class TradierCategorizer(QObject):
                 
                 # Load bkgnews.json
                 bkgnews = self.fm.load_bkgnews()
+                self.log.scanner(f"[TIER3-TRADIER] Loaded {len(bkgnews)} breaking news symbols: {list(bkgnews.keys())}")
                 
                 # Combine symbols to subscribe
                 all_symbols = set()
                 all_symbols.update([s['symbol'] for s in validated if 'symbol' in s])
                 all_symbols.update(active_halts.keys())
-                all_symbols.update(bkgnews.keys())
+                all_symbols.update([item['symbol'] for item in bkgnews.values() if 'symbol' in item])
+
+                # Fetch previous closes for new symbols
+                new_symbols = all_symbols - set(self.prev_closes.keys())
+                if new_symbols:
+                    self.log.scanner(f"[TIER3-TRADIER] Fetching prev_closes for {len(new_symbols)} new symbols")
+                    self.fetch_prev_closes(list(new_symbols))
                 
                 # Update subscriptions
                 self._update_subscriptions(all_symbols)
@@ -163,7 +199,7 @@ class TradierCategorizer(QObject):
         self.log.scanner("[TIER3-TRADIER] WebSocket opened")
         
     def _on_message(self, ws, message):
-        self.log.scanner(f"[TIER3-TRADIER] Received message: {message[:200]}")
+        #self.log.scanner(f"[TIER3-TRADIER] Received message: {message[:200]}")
         """Handle incoming WebSocket message"""
         try:
             data = json.loads(message)
@@ -223,7 +259,7 @@ class TradierCategorizer(QObject):
             self.subscribed_symbols.update(symbol_list)
             
     def _handle_quote(self, data: dict):
-        self.log.scanner(f"[TIER3-TRADIER] Handling QUOTE: {data.get('symbol')}")
+        #self.log.scanner(f"[TIER3-TRADIER] Handling QUOTE: {data.get('symbol')}")
         """Handle real-time quote"""
         try:
             symbol = data.get('symbol')
@@ -251,31 +287,34 @@ class TradierCategorizer(QObject):
             self.log.crash(f"[TIER3-TRADIER] Error handling quote: {e}")
             
     def _handle_trade(self, data: dict):
-        self.log.scanner(f"[TIER3-TRADIER] Handling TRADE: {data.get('symbol')}")
         """Handle real-time trade"""
         try:
             symbol = data.get('symbol')
-        
+    
             if not symbol:
                 return
-            
-            if symbol not in self.live_data:
-                self.live_data[symbol] = {}
         
+            if symbol not in self.live_data:
+                self.live_data[symbol] = {'volume': 0}  # Initialize with 0 volume
+    
             # Convert price to float
             price = data.get('price')
             if price:
                 price = float(price)
-            
+        
+            # ACCUMULATE volume (don't overwrite)
+            trade_size = data.get('size', 0)
+            current_volume = self.live_data[symbol].get('volume', 0)
+        
             self.live_data[symbol].update({
                 'price': price,
-                'volume': data.get('size'),
+                'volume': current_volume + trade_size,  # ADD to cumulative volume
                 'timestamp': datetime.utcnow().isoformat()
             })
-        
+    
             # Detect channel and emit signal
             self._categorize_symbol(symbol)
-        
+    
         except Exception as e:
             self.log.crash(f"[TIER3-TRADIER] Error handling trade: {e}")
 
@@ -292,12 +331,15 @@ class TradierCategorizer(QObject):
                 ask = enriched.get('ask', 0)
                 price = (bid + ask) / 2 if bid and ask else 0
             enriched['price'] = price
+
+            if 'volume' not in enriched or enriched.get('volume', 0) == 0:
+                enriched['volume'] = 0  # Set to 0 if missing, rvol will be 0
             
             prev_close = self.prev_closes.get(symbol, price)
             if prev_close > 0:
                 enriched['gap_pct'] = ((price - prev_close) / prev_close) * 100
             else:
-                enriched['gap_pct'] = 0
+                enriched['gap_pct'] = 0  # INDENT THIS LINE
             
             current_high = self.day_highs.get(symbol, price)
             if price > current_high:
@@ -307,7 +349,7 @@ class TradierCategorizer(QObject):
                 enriched['is_hod'] = False
             enriched['hod_price'] = self.day_highs.get(symbol, price)
             
-            current_vol = live_data.get('volume', 0)
+            current_vol = float(live_data.get('volume', 0)) if live_data.get('volume') else 0
             avg_vol = enriched.get('volume_avg', 1000000)
             enriched['rvol'] = current_vol / avg_vol if avg_vol > 0 else 0
             
@@ -361,12 +403,20 @@ class TradierCategorizer(QObject):
         try:
             live_data = self.live_data.get(symbol, {})
             
+            self.log.scanner(f"[TIER3-DEBUG] Categorizing {symbol}, live_data keys: {list(live_data.keys())}")
+
             # Enrich with calculated fields
             stock_data = self._enrich_stock_data(symbol, live_data)
             
+            if symbol == 'FGL':  # Just debug one symbol to avoid spam
+                pass
+                #self.log.scanner(f"[TIER3-DEBUG] FGL enriched data: price={stock_data.get('price')}, gap_pct={stock_data.get('gap_pct')}, rvol={stock_data.get('rvol')}, is_hod={stock_data.get('is_hod')}")
+
             # Detect channel
             channel = self.detector.detect_channel(stock_data)
             
+            #self.log.scanner(f"[TIER3-DEBUG] {symbol} detected channel: {channel}")
+
             if channel:
                 # Add to channel if not already there
                 if symbol not in self.channels[channel]:
@@ -390,3 +440,42 @@ class TradierCategorizer(QObject):
         """Get live data for a specific channel (for GUI)"""
         symbols = self.channels.get(channel, [])
         return [self.live_data.get(s, {}) for s in symbols]
+    
+    def fetch_prev_closes(self, symbols: list):
+        """Fetch previous closing prices for symbols using Alpaca REST API"""
+        from alpaca.data.historical import StockHistoricalDataClient
+        from alpaca.data.requests import StockBarsRequest
+        from alpaca.data.timeframe import TimeFrame
+        from datetime import datetime, timedelta
+    
+        try:
+            # Initialize Alpaca client
+            client = StockHistoricalDataClient(
+                api_key=API_KEYS['ALPACA_API_KEY'],
+                secret_key=API_KEYS['ALPACA_SECRET_KEY']
+            )
+        
+            # Get bars for last 5 days
+            end = datetime.now()
+            start = end - timedelta(days=5)
+        
+            request_params = StockBarsRequest(
+                symbol_or_symbols=list(symbols),
+                timeframe=TimeFrame.Day,
+                start=start,
+                end=end
+            )
+        
+            bars = client.get_stock_bars(request_params)
+        
+            # Extract prev_close for each symbol
+            for symbol in symbols:
+                if symbol in bars:
+                    symbol_bars = bars[symbol]
+                    if len(symbol_bars) >= 2:
+                        # Get second-to-last close (previous day)
+                        prev_close = symbol_bars[-2].close
+                        self.prev_closes[symbol] = float(prev_close)
+                    
+        except Exception as e:
+            self.log.crash(f"[TIER3-TRADIER] Error fetching prev_closes from Alpaca: {e}")
